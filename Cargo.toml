@@ -1,0 +1,14 @@
+[package]
+name = "screen-13-demo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+screen-13 = { path = "screen-13" }
+bytemuck = "1.9"
+pretty_env_logger = "0.4"
+anyhow = "1.0"
+ash = "0.37"
+shaderc = "0.8"
