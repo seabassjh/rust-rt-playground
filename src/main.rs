@@ -6,7 +6,6 @@ mod shaders;
 
 use {bytemuck::cast_slice, screen_13::prelude::*, std::sync::Arc};
 
-/// Adapted from http://williamlewww.com/showcase_website/vk_khr_ray_tracing_tutorial/index.html
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
