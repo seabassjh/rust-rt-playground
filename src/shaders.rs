@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 
 use ash::vk;
-use shaderc::{CompileOptions, Compiler, IncludeType, ResolvedInclude, ShaderKind, TargetEnv};
+use shaderc::{CompileOptions, Compiler, IncludeType, ResolvedInclude, ShaderKind};
 
 pub fn compile_spv_u32_data(path: PathBuf, stage_flags: vk::ShaderStageFlags) -> Vec<u32> {
     let source = fs::read_to_string(path.as_path()).expect("Couldn't read shader");
