@@ -6,8 +6,107 @@ mod shaders;
 
 use {bytemuck::cast_slice, screen_13::prelude::*, std::sync::Arc};
 
-// A Vulkan triangle using a graphic pipeline, vertex/fragment shaders, and index/vertex buffers.
-fn main() -> Result<(), DisplayError> {
+// static SHADER_RAY_GEN: &[u32] = inline_spirv!(
+//     r#"
+//     #version 460
+//     #extension GL_EXT_ray_tracing : enable
+
+//     layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
+//     layout(binding = 1, set = 0, rgba32f) uniform image2D image;
+
+//     layout(location = 0) rayPayloadEXT vec3 hitValue;
+
+//     void main() {
+//         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+//         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+//         vec2 d = inUV * 2.0 - 1.0;
+
+//         vec4 origin = vec4(d.x, d.y, -1,1);
+//         vec4 target = vec4(d.x, d.y, 1, 1) ;
+//         vec4 direction = vec4(normalize(target.xyz), 0) ;
+
+//         float tmin = 0.001;
+//         float tmax = 10000.0;
+
+//         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin.xyz, tmin, direction.xyz, tmax, 0);
+
+//         imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(hitValue, 0.0));
+//     }
+//     "#,
+//     rgen,
+//     vulkan1_2
+// )
+// .as_slice();
+
+// static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
+//     r#"
+//     #version 460
+//     #extension GL_EXT_ray_tracing : enable
+//     #extension GL_EXT_nonuniform_qualifier : enable
+
+//     layout(location = 0) rayPayloadInEXT vec3 resultColor;
+//     hitAttributeEXT vec2 attribs;
+
+//     void main() {
+//       const vec3 barycentricCoords = vec3(1.0f - attribs.x - attribs.y, attribs.x, attribs.y);
+//       resultColor = barycentricCoords;
+//     }
+//     "#,
+//     rchit,
+//     vulkan1_2
+// )
+// .as_slice();
+
+// static SHADER_MISS: &[u32] = inline_spirv!(
+//     r#"
+//     #version 460
+//     #extension GL_EXT_ray_tracing : enable
+
+//     layout(location = 0) rayPayloadInEXT vec3 hitValue;
+
+//     void main() {
+//         hitValue = vec3(0.0, 0.0, 0.2);
+//     }
+//     "#,
+//     rmiss,
+//     vulkan1_2
+// )
+// .as_slice();
+
+fn align_up(val: u32, atom: u32) -> u32 {
+    (val + atom - 1) & !(atom - 1)
+}
+
+fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
+    Ok(Arc::new(RayTracePipeline::create(
+        device,
+        RayTracePipelineInfo::new()
+            .max_ray_recursion_depth(1)
+            .build(),
+        [
+            Shader::new_ray_gen(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/raygen.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            )),
+            Shader::new_closest_hit(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/closesthit.rchit"),
+                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            )),
+            Shader::new_miss(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/miss.rmiss"),
+                vk::ShaderStageFlags::MISS_KHR,
+            )),
+        ],
+        [
+            RayTraceShaderGroup::new_general(0),
+            RayTraceShaderGroup::new_triangles(1, None),
+            RayTraceShaderGroup::new_general(2),
+        ],
+    )?))
+}
+
+/// Adapted from http://williamlewww.com/showcase_website/vk_khr_ray_tracing_tutorial/index.html
+fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
     let event_loop = EventLoop::new().ray_tracing(true).build()?;
@@ -36,7 +135,7 @@ fn main() -> Result<(), DisplayError> {
     let sbt_handle_size = align_up(shader_group_handle_size, shader_group_handle_alignment);
     let sbt_rgen_size = align_up(sbt_handle_size, shader_group_base_alignment);
     let sbt_hit_size = align_up(sbt_handle_size, shader_group_base_alignment);
-    let sbt_miss_size = align_up(sbt_handle_size, shader_group_base_alignment);
+    let sbt_miss_size = align_up(2 * sbt_handle_size, shader_group_base_alignment);
     let sbt_buf = Arc::new({
         let mut buf = Buffer::create(
             &event_loop.device,
@@ -64,7 +163,6 @@ fn main() -> Result<(), DisplayError> {
 
         buf
     });
-
     let sbt_address = Buffer::device_address(&sbt_buf);
     let sbt_rgen = vk::StridedDeviceAddressRegionKHR {
         device_address: sbt_address,
@@ -84,9 +182,10 @@ fn main() -> Result<(), DisplayError> {
     let sbt_callable = vk::StridedDeviceAddressRegionKHR::default();
 
     // ------------------------------------------------------------------------------------------ //
-    // Create the bottom level acceleration structure
+    // Generate the geometry and load it into buffers
     // ------------------------------------------------------------------------------------------ //
     let triangle_count = 1;
+    let vertex_count = triangle_count * 3;
 
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
@@ -98,7 +197,6 @@ fn main() -> Result<(), DisplayError> {
     unsafe impl bytemuck::Pod for Vertex {}
     unsafe impl bytemuck::Zeroable for Vertex {}
 
-    const VERTEX_COUNT: usize = 3;
     const VERTICES: [Vertex; 3] = [
         Vertex {
             pos: [-1.0, 1.0, 0.0],
@@ -143,6 +241,10 @@ fn main() -> Result<(), DisplayError> {
         Arc::new(buf)
     };
 
+    // ------------------------------------------------------------------------------------------ //
+    // Create the bottom level acceleration structure
+    // ------------------------------------------------------------------------------------------ //
+
     let blas_geometry_info = AccelerationStructureGeometryInfo {
         ty: vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
         flags: vk::BuildAccelerationStructureFlagsKHR::empty(),
@@ -152,7 +254,7 @@ fn main() -> Result<(), DisplayError> {
             geometry: AccelerationStructureGeometryData::Triangles {
                 index_data: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(&index_buf)),
                 index_type: vk::IndexType::UINT32,
-                max_vertex: VERTEX_COUNT as u32,
+                max_vertex: vertex_count,
                 transform_data: None,
                 vertex_data: DeviceOrHostAddress::DeviceAddress(Buffer::device_address(
                     &vertex_buf,
@@ -162,7 +264,6 @@ fn main() -> Result<(), DisplayError> {
             },
         }],
     };
-
     let blas_size = AccelerationStructure::size_of(&event_loop.device, &blas_geometry_info);
     let blas = Arc::new(AccelerationStructure::create(
         &event_loop.device,
@@ -176,6 +277,7 @@ fn main() -> Result<(), DisplayError> {
     // ------------------------------------------------------------------------------------------ //
     // Create an instance buffer, which is just one instance for the single BLAS
     // ------------------------------------------------------------------------------------------ //
+
     let instance = AccelerationStructure::instance_slice(vk::AccelerationStructureInstanceKHR {
         transform: vk::TransformMatrixKHR {
             matrix: [
@@ -210,6 +312,7 @@ fn main() -> Result<(), DisplayError> {
     // ------------------------------------------------------------------------------------------ //
     // Create the top level acceleration structure
     // ------------------------------------------------------------------------------------------ //
+
     let tlas_geometry_info = AccelerationStructureGeometryInfo {
         ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
         flags: vk::BuildAccelerationStructureFlagsKHR::empty(),
@@ -232,9 +335,9 @@ fn main() -> Result<(), DisplayError> {
     )?);
 
     // ------------------------------------------------------------------------------------------ //
-    // ------------------------------------------------------------------------------------------ //
     // Build the BLAS and TLAS; note that we don't drop the cache and so there is no CPU stall
     // ------------------------------------------------------------------------------------------ //
+
     {
         let mut render_graph = RenderGraph::new();
         let index_node = render_graph.bind_node(&index_buf);
@@ -309,85 +412,39 @@ fn main() -> Result<(), DisplayError> {
             .resolve()
             .submit(&event_loop.device.queue, &mut cache)?;
     }
+
     // ------------------------------------------------------------------------------------------ //
-    // let triangle_pipeline = event_loop.new_graphic_pipeline(
-    //     GraphicPipelineInfo::default(),
-    //     [
-    //         Shader::new_vertex(compile_spv_u32_data(
-    //             PathBuf::from("./assets/shaders/triangle.vert"),
-    //             vk::ShaderStageFlags::VERTEX,
-    //         )),
-    //         Shader::new_fragment(compile_spv_u32_data(
-    //             PathBuf::from("./assets/shaders/triangle.frag"),
-    //             vk::ShaderStageFlags::FRAGMENT,
-    //         )),
-    //     ],
-    // );
-
-    // let index_buf = Arc::new(Buffer::create_from_slice(
-    //     &event_loop.device,
-    //     vk::BufferUsageFlags::INDEX_BUFFER,
-    //     cast_slice(&[0u16, 1, 2]),
-    // )?);
-
-    // let vertex_buf = Arc::new(Buffer::create_from_slice(
-    //     &event_loop.device,
-    //     vk::BufferUsageFlags::VERTEX_BUFFER,
-    //     cast_slice(&[
-    //         1.0f32, 1.0, 0.0, // v1
-    //         1.0, 0.0, 0.0, // red
-    //         0.0, -1.0, 0.0, // v2
-    //         0.0, 1.0, 0.0, // green
-    //         -1.0, 1.0, 0.0, // v3
-    //         0.0, 0.0, 1.0, // blue
-    //     ]),
-    // )?);
+    // Setup some state variables to hold between frames
+    // ------------------------------------------------------------------------------------------ //
 
     let mut image = None;
 
+    // The event loop consists of:
+    // - Trace the image
+    // - Copy image to the swapchain
     event_loop.run(|frame| {
-        // let index_node = frame.render_graph.bind_node(&index_buf);
-        // let vertex_node = frame.render_graph.bind_node(&vertex_buf);
-
-        // frame
-        //     .render_graph
-        //     .begin_pass("Triangle Example")
-        //     .bind_pipeline(&triangle_pipeline)
-        //     .access_node(index_node, AccessType::IndexBuffer)
-        //     .access_node(vertex_node, AccessType::VertexBuffer)
-        //     .clear_color(0)
-        //     .store_color(0, frame.swapchain_image)
-        //     .record_subpass(move |subpass| {
-        //         subpass.bind_index_buffer(index_node, vk::IndexType::UINT16);
-        //         subpass.bind_vertex_buffer(vertex_node);
-        //         subpass.draw_indexed(3, 1, 0, 0, 0);
-        //     });
-        if image.is_none() {
-            image = Some(Arc::new(
-                cache
-                    .lease(ImageInfo::new_2d(
-                        frame.render_graph.node_info(frame.swapchain_image).fmt,
-                        frame.width,
-                        frame.height,
-                        vk::ImageUsageFlags::STORAGE
-                            | vk::ImageUsageFlags::TRANSFER_DST
-                            | vk::ImageUsageFlags::TRANSFER_SRC,
-                    ))
-                    .unwrap(),
-            ));
-        }
+        image = Some(Arc::new(
+            cache
+                .lease(ImageInfo::new_2d(
+                    frame.render_graph.node_info(frame.swapchain_image).fmt,
+                    frame.width,
+                    frame.height,
+                    vk::ImageUsageFlags::STORAGE
+                        | vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::TRANSFER_SRC,
+                ))
+                .unwrap(),
+        ));
 
         let image_node = frame.render_graph.bind_node(image.as_ref().unwrap());
 
         let blas_node = frame.render_graph.bind_node(&blas);
         let tlas_node = frame.render_graph.bind_node(&tlas);
-        let index_buf_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_buf_node = frame.render_graph.bind_node(&vertex_buf);
         let sbt_node = frame.render_graph.bind_node(&sbt_buf);
 
         frame
             .render_graph
-            .begin_pass("Ray-traced Triangle Example")
+            .begin_pass("basic ray tracer")
             .bind_pipeline(&ray_trace_pipeline)
             .access_node(
                 blas_node,
@@ -399,8 +456,6 @@ fn main() -> Result<(), DisplayError> {
                 tlas_node,
                 AccessType::RayTracingShaderReadAccelerationStructure,
             )
-            // .access_descriptor(1, index_buf_node, AccessType::RayTracingShaderReadOther)
-            // .access_descriptor(2, vertex_buf_node, AccessType::RayTracingShaderReadOther)
             .write_descriptor(1, image_node)
             .record_ray_trace(move |ray_trace| {
                 ray_trace.trace_rays(
@@ -415,37 +470,7 @@ fn main() -> Result<(), DisplayError> {
             })
             .submit_pass()
             .copy_image(image_node, frame.swapchain_image);
-    })
-}
+    })?;
 
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
-    Ok(Arc::new(RayTracePipeline::create(
-        device,
-        RayTracePipelineInfo::new()
-            .max_ray_recursion_depth(1)
-            .build(),
-        [
-            Shader::new_ray_gen(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/raygen.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            )),
-            Shader::new_miss(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/miss.rmiss"),
-                vk::ShaderStageFlags::MISS_KHR,
-            )),
-            Shader::new_closest_hit(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/closesthit.rchit"),
-                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-            )),
-        ],
-        [
-            RayTraceShaderGroup::new_general(0),
-            RayTraceShaderGroup::new_general(1),
-            RayTraceShaderGroup::new_triangles(2, None),
-        ],
-    )?))
-}
-
-fn align_up(val: u32, atom: u32) -> u32 {
-    (val + atom - 1) & !(atom - 1)
+    Ok(())
 }

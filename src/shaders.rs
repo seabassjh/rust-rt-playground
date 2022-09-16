@@ -14,6 +14,10 @@ pub fn compile_spv_u32_data(path: PathBuf, stage_flags: vk::ShaderStageFlags) ->
     let compiler = Compiler::new().unwrap();
     let mut options = CompileOptions::new().unwrap();
     options.set_generate_debug_info();
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
     options.set_target_spirv(shaderc::SpirvVersion::V1_6);
 
     let origin_path = path.clone();
