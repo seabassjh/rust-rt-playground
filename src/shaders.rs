@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 
 use ash::vk;
-use shaderc::{CompileOptions, Compiler, IncludeType, ResolvedInclude, ShaderKind};
+use shaderc::{CompileOptions, Compiler, IncludeType, ResolvedInclude, ShaderKind, TargetEnv};
 
 pub fn compile_spv_u32_data(path: PathBuf, stage_flags: vk::ShaderStageFlags) -> Vec<u32> {
     let source = fs::read_to_string(path.as_path()).expect("Couldn't read shader");
@@ -14,6 +14,8 @@ pub fn compile_spv_u32_data(path: PathBuf, stage_flags: vk::ShaderStageFlags) ->
     let compiler = Compiler::new().unwrap();
     let mut options = CompileOptions::new().unwrap();
     options.set_generate_debug_info();
+    options.set_target_spirv(shaderc::SpirvVersion::V1_6);
+
     let origin_path = path.clone();
     options.set_include_callback(
         move |requested_source, include_type, origin_source, recursion_depth| {
