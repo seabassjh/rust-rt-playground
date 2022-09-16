@@ -11,7 +11,7 @@ fn main() -> Result<(), DisplayError> {
     pretty_env_logger::init();
 
     let event_loop = EventLoop::new().ray_tracing(true).build()?;
-    let mut _cache = HashPool::new(&event_loop.device);
+    let mut cache = HashPool::new(&event_loop.device);
 
     // ------------------------------------------------------------------------------------------ //
     // Setup the ray tracing pipeline
@@ -92,7 +92,7 @@ fn main() -> Result<(), DisplayError> {
     #[derive(Debug, Clone, Copy)]
     #[allow(dead_code)]
     struct Vertex {
-        pos: [f32; 2],
+        pos: [f32; 3],
     }
 
     unsafe impl bytemuck::Pod for Vertex {}
@@ -100,9 +100,15 @@ fn main() -> Result<(), DisplayError> {
 
     const VERTEX_COUNT: usize = 3;
     const VERTICES: [Vertex; 3] = [
-        Vertex { pos: [-1.0, 1.0] },
-        Vertex { pos: [1.0, 1.0] },
-        Vertex { pos: [0.0, -1.0] },
+        Vertex {
+            pos: [-1.0, 1.0, 0.0],
+        },
+        Vertex {
+            pos: [1.0, 1.0, 0.0],
+        },
+        Vertex {
+            pos: [0.0, -1.0, 0.0],
+        },
     ];
 
     const INDICES: [u32; 3] = [0, 1, 2];
@@ -301,60 +307,114 @@ fn main() -> Result<(), DisplayError> {
 
         render_graph
             .resolve()
-            .submit(&event_loop.device.queue, &mut _cache)?;
+            .submit(&event_loop.device.queue, &mut cache)?;
     }
     // ------------------------------------------------------------------------------------------ //
+    // let triangle_pipeline = event_loop.new_graphic_pipeline(
+    //     GraphicPipelineInfo::default(),
+    //     [
+    //         Shader::new_vertex(compile_spv_u32_data(
+    //             PathBuf::from("./assets/shaders/triangle.vert"),
+    //             vk::ShaderStageFlags::VERTEX,
+    //         )),
+    //         Shader::new_fragment(compile_spv_u32_data(
+    //             PathBuf::from("./assets/shaders/triangle.frag"),
+    //             vk::ShaderStageFlags::FRAGMENT,
+    //         )),
+    //     ],
+    // );
 
-    let triangle_pipeline = event_loop.new_graphic_pipeline(
-        GraphicPipelineInfo::default(),
-        [
-            Shader::new_vertex(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/triangle.vert"),
-                vk::ShaderStageFlags::VERTEX,
-            )),
-            Shader::new_fragment(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/triangle.frag"),
-                vk::ShaderStageFlags::FRAGMENT,
-            )),
-        ],
-    );
+    // let index_buf = Arc::new(Buffer::create_from_slice(
+    //     &event_loop.device,
+    //     vk::BufferUsageFlags::INDEX_BUFFER,
+    //     cast_slice(&[0u16, 1, 2]),
+    // )?);
 
-    let index_buf = Arc::new(Buffer::create_from_slice(
-        &event_loop.device,
-        vk::BufferUsageFlags::INDEX_BUFFER,
-        cast_slice(&[0u16, 1, 2]),
-    )?);
+    // let vertex_buf = Arc::new(Buffer::create_from_slice(
+    //     &event_loop.device,
+    //     vk::BufferUsageFlags::VERTEX_BUFFER,
+    //     cast_slice(&[
+    //         1.0f32, 1.0, 0.0, // v1
+    //         1.0, 0.0, 0.0, // red
+    //         0.0, -1.0, 0.0, // v2
+    //         0.0, 1.0, 0.0, // green
+    //         -1.0, 1.0, 0.0, // v3
+    //         0.0, 0.0, 1.0, // blue
+    //     ]),
+    // )?);
 
-    let vertex_buf = Arc::new(Buffer::create_from_slice(
-        &event_loop.device,
-        vk::BufferUsageFlags::VERTEX_BUFFER,
-        cast_slice(&[
-            1.0f32, 1.0, 0.0, // v1
-            1.0, 0.0, 0.0, // red
-            0.0, -1.0, 0.0, // v2
-            0.0, 1.0, 0.0, // green
-            -1.0, 1.0, 0.0, // v3
-            0.0, 0.0, 1.0, // blue
-        ]),
-    )?);
+    let mut image = None;
 
     event_loop.run(|frame| {
-        let index_node = frame.render_graph.bind_node(&index_buf);
-        let vertex_node = frame.render_graph.bind_node(&vertex_buf);
+        // let index_node = frame.render_graph.bind_node(&index_buf);
+        // let vertex_node = frame.render_graph.bind_node(&vertex_buf);
+
+        // frame
+        //     .render_graph
+        //     .begin_pass("Triangle Example")
+        //     .bind_pipeline(&triangle_pipeline)
+        //     .access_node(index_node, AccessType::IndexBuffer)
+        //     .access_node(vertex_node, AccessType::VertexBuffer)
+        //     .clear_color(0)
+        //     .store_color(0, frame.swapchain_image)
+        //     .record_subpass(move |subpass| {
+        //         subpass.bind_index_buffer(index_node, vk::IndexType::UINT16);
+        //         subpass.bind_vertex_buffer(vertex_node);
+        //         subpass.draw_indexed(3, 1, 0, 0, 0);
+        //     });
+        if image.is_none() {
+            image = Some(Arc::new(
+                cache
+                    .lease(ImageInfo::new_2d(
+                        frame.render_graph.node_info(frame.swapchain_image).fmt,
+                        frame.width,
+                        frame.height,
+                        vk::ImageUsageFlags::STORAGE
+                            | vk::ImageUsageFlags::TRANSFER_DST
+                            | vk::ImageUsageFlags::TRANSFER_SRC,
+                    ))
+                    .unwrap(),
+            ));
+        }
+
+        let image_node = frame.render_graph.bind_node(image.as_ref().unwrap());
+
+        let blas_node = frame.render_graph.bind_node(&blas);
+        let tlas_node = frame.render_graph.bind_node(&tlas);
+        let index_buf_node = frame.render_graph.bind_node(&index_buf);
+        let vertex_buf_node = frame.render_graph.bind_node(&vertex_buf);
+        let sbt_node = frame.render_graph.bind_node(&sbt_buf);
 
         frame
             .render_graph
-            .begin_pass("Triangle Example")
-            .bind_pipeline(&triangle_pipeline)
-            .access_node(index_node, AccessType::IndexBuffer)
-            .access_node(vertex_node, AccessType::VertexBuffer)
-            .clear_color(0)
-            .store_color(0, frame.swapchain_image)
-            .record_subpass(move |subpass| {
-                subpass.bind_index_buffer(index_node, vk::IndexType::UINT16);
-                subpass.bind_vertex_buffer(vertex_node);
-                subpass.draw_indexed(3, 1, 0, 0, 0);
-            });
+            .begin_pass("Ray-traced Triangle Example")
+            .bind_pipeline(&ray_trace_pipeline)
+            .access_node(
+                blas_node,
+                AccessType::RayTracingShaderReadAccelerationStructure,
+            )
+            .access_node(sbt_node, AccessType::RayTracingShaderReadOther)
+            .access_descriptor(
+                0,
+                tlas_node,
+                AccessType::RayTracingShaderReadAccelerationStructure,
+            )
+            // .access_descriptor(1, index_buf_node, AccessType::RayTracingShaderReadOther)
+            // .access_descriptor(2, vertex_buf_node, AccessType::RayTracingShaderReadOther)
+            .write_descriptor(1, image_node)
+            .record_ray_trace(move |ray_trace| {
+                ray_trace.trace_rays(
+                    &sbt_rgen,
+                    &sbt_miss,
+                    &sbt_hit,
+                    &sbt_callable,
+                    frame.width,
+                    frame.height,
+                    1,
+                );
+            })
+            .submit_pass()
+            .copy_image(image_node, frame.swapchain_image);
     })
 }
 
