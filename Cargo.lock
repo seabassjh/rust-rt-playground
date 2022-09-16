@@ -1009,6 +1009,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-rt-playground"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ash 0.37.0+1.3.209",
+ "bytemuck",
+ "pretty_env_logger",
+ "screen-13",
+ "shaderc",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1049,18 +1061,6 @@ dependencies = [
  "spirq",
  "vk-sync-fork",
  "winit",
-]
-
-[[package]]
-name = "screen-13-demo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ash 0.37.0+1.3.209",
- "bytemuck",
- "pretty_env_logger",
- "screen-13",
- "shaderc",
 ]
 
 [[package]]

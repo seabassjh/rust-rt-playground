@@ -6,105 +6,6 @@ mod shaders;
 
 use {bytemuck::cast_slice, screen_13::prelude::*, std::sync::Arc};
 
-// static SHADER_RAY_GEN: &[u32] = inline_spirv!(
-//     r#"
-//     #version 460
-//     #extension GL_EXT_ray_tracing : enable
-
-//     layout(binding = 0, set = 0) uniform accelerationStructureEXT topLevelAS;
-//     layout(binding = 1, set = 0, rgba32f) uniform image2D image;
-
-//     layout(location = 0) rayPayloadEXT vec3 hitValue;
-
-//     void main() {
-//         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-//         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
-//         vec2 d = inUV * 2.0 - 1.0;
-
-//         vec4 origin = vec4(d.x, d.y, -1,1);
-//         vec4 target = vec4(d.x, d.y, 1, 1) ;
-//         vec4 direction = vec4(normalize(target.xyz), 0) ;
-
-//         float tmin = 0.001;
-//         float tmax = 10000.0;
-
-//         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0, origin.xyz, tmin, direction.xyz, tmax, 0);
-
-//         imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(hitValue, 0.0));
-//     }
-//     "#,
-//     rgen,
-//     vulkan1_2
-// )
-// .as_slice();
-
-// static SHADER_CLOSEST_HIT: &[u32] = inline_spirv!(
-//     r#"
-//     #version 460
-//     #extension GL_EXT_ray_tracing : enable
-//     #extension GL_EXT_nonuniform_qualifier : enable
-
-//     layout(location = 0) rayPayloadInEXT vec3 resultColor;
-//     hitAttributeEXT vec2 attribs;
-
-//     void main() {
-//       const vec3 barycentricCoords = vec3(1.0f - attribs.x - attribs.y, attribs.x, attribs.y);
-//       resultColor = barycentricCoords;
-//     }
-//     "#,
-//     rchit,
-//     vulkan1_2
-// )
-// .as_slice();
-
-// static SHADER_MISS: &[u32] = inline_spirv!(
-//     r#"
-//     #version 460
-//     #extension GL_EXT_ray_tracing : enable
-
-//     layout(location = 0) rayPayloadInEXT vec3 hitValue;
-
-//     void main() {
-//         hitValue = vec3(0.0, 0.0, 0.2);
-//     }
-//     "#,
-//     rmiss,
-//     vulkan1_2
-// )
-// .as_slice();
-
-fn align_up(val: u32, atom: u32) -> u32 {
-    (val + atom - 1) & !(atom - 1)
-}
-
-fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
-    Ok(Arc::new(RayTracePipeline::create(
-        device,
-        RayTracePipelineInfo::new()
-            .max_ray_recursion_depth(1)
-            .build(),
-        [
-            Shader::new_ray_gen(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/raygen.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            )),
-            Shader::new_closest_hit(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/closesthit.rchit"),
-                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-            )),
-            Shader::new_miss(compile_spv_u32_data(
-                PathBuf::from("./assets/shaders/miss.rmiss"),
-                vk::ShaderStageFlags::MISS_KHR,
-            )),
-        ],
-        [
-            RayTraceShaderGroup::new_general(0),
-            RayTraceShaderGroup::new_triangles(1, None),
-            RayTraceShaderGroup::new_general(2),
-        ],
-    )?))
-}
-
 /// Adapted from http://williamlewww.com/showcase_website/vk_khr_ray_tracing_tutorial/index.html
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
@@ -473,4 +374,36 @@ fn main() -> anyhow::Result<()> {
     })?;
 
     Ok(())
+}
+
+fn align_up(val: u32, atom: u32) -> u32 {
+    (val + atom - 1) & !(atom - 1)
+}
+
+fn create_ray_trace_pipeline(device: &Arc<Device>) -> Result<Arc<RayTracePipeline>, DriverError> {
+    Ok(Arc::new(RayTracePipeline::create(
+        device,
+        RayTracePipelineInfo::new()
+            .max_ray_recursion_depth(1)
+            .build(),
+        [
+            Shader::new_ray_gen(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/raygen.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            )),
+            Shader::new_closest_hit(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/closesthit.rchit"),
+                vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            )),
+            Shader::new_miss(compile_spv_u32_data(
+                PathBuf::from("./assets/shaders/miss.rmiss"),
+                vk::ShaderStageFlags::MISS_KHR,
+            )),
+        ],
+        [
+            RayTraceShaderGroup::new_general(0),
+            RayTraceShaderGroup::new_triangles(1, None),
+            RayTraceShaderGroup::new_general(2),
+        ],
+    )?))
 }
