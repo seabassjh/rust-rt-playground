@@ -84,8 +84,8 @@ fn main() -> anyhow::Result<()> {
     // ------------------------------------------------------------------------------------------ //
     // Generate the geometry and load it into buffers
     // ------------------------------------------------------------------------------------------ //
-    let triangle_count = 1;
-    let vertex_count = triangle_count * 3;
+    let triangle_count = 2;
+    let vertex_count = 4;
 
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
@@ -97,19 +97,22 @@ fn main() -> anyhow::Result<()> {
     unsafe impl bytemuck::Pod for Vertex {}
     unsafe impl bytemuck::Zeroable for Vertex {}
 
-    const VERTICES: [Vertex; 3] = [
+    const VERTICES: [Vertex; 4] = [
         Vertex {
-            pos: [-1.0, 1.0, 0.0],
+            pos: [-1.0, 1.0, 0.0], // 0
         },
         Vertex {
-            pos: [1.0, 1.0, 0.0],
+            pos: [1.0, 1.0, 0.0], // 1
         },
         Vertex {
-            pos: [0.0, -1.0, 0.0],
+            pos: [1.0, -1.0, 0.0], // 2
+        },
+        Vertex {
+            pos: [-1.0, -1.0, 0.0], // 3
         },
     ];
 
-    const INDICES: [u32; 3] = [0, 1, 2];
+    const INDICES: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
     let index_buf = {
         let data = cast_slice(&INDICES);
